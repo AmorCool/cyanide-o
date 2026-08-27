@@ -24,7 +24,15 @@ output/macos/libxpf.dylib: $(wildcard src/*.c) $(CHOMA_DEP)
 output/ios/libxpf.dylib: $(wildcard src/*.c) $(CHOMA_DEP)
 	@mkdir -p $(shell dirname $@)
 	$(CC) $(CFLAGS_IOS) $(LDFLAGS) -dynamiclib -install_name @loader_path/libxpf.dylib -o $@ $^
-	ldid -S $@
+	# Sign the dylib. Prefer Apple codesign: ldid 2.1.5 (the bottle installed
+	# on macOS 15 / Tahoe Apple-Silicon CI runners) emits an EMPTY
+	# CODE_SIGNATURE superblob (LC_CODE_SIGNATURE cmd header only, 0 bytes of
+	# signature data) on the fat arm64/arm64e dylib. iOS rejects that dylib at
+	# dlopen time, which silently breaks KRW on device even though the rest of
+	# the binary is identical to a locally-built one. codesign always produces
+	# a real code directory blob. Fall back to ldid only if codesign is missing.
+	codesign --force --sign - $@ || ldid -S $@
+	@codesign -v $@ || { echo "ERROR: libxpf.dylib has no valid code signature (KRW will fail on device)"; exit 1; }
 
 output/iphonesimulator/libxpf.dylib: $(wildcard src/*.c) $(CHOMA_DEP)
 	@mkdir -p $(shell dirname $@)
@@ -37,7 +45,8 @@ output/macos/xpf_test: $(wildcard src/cli/*.c)
 output/ios/xpf_test: $(wildcard src/cli/*.c)
 	@mkdir -p $(shell dirname $@)
 	$(CC) $(CFLAGS_IOS) $(LDFLAGS) -L$(shell dirname $@) -lxpf -o $@ $^
-	@ldid -S $@
+	@codesign --force --sign - $@ || ldid -S $@
+	@codesign -v $@ || { echo "ERROR: xpf_test has no valid code signature"; exit 1; }
 
 clean:
 	@rm -rf output

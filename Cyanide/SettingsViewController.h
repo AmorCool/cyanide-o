@@ -107,6 +107,11 @@ void settings_mark_tweak_needs_apply(NSString *key);
 
 void settings_register_defaults(void);
 BOOL settings_device_supported(void);
+// Ensures the kernel exploit (KRW) is live and the SpringBoard RemoteCall
+// session is established. Returns YES if KRW is ready for use (either already
+// cached or freshly run). Other KRW-dependent features (App Downgrade, etc.)
+// should call this before driving RemoteCall into SpringBoard.
+BOOL settings_ensure_kexploit(void);
 // Opens the Contact email composer (MFMailComposeViewController if Mail is
 // configured, else mailto: fallback) prefilled with the latest diagnostic log
 // inline. Presented from `host`.

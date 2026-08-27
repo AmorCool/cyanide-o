@@ -40,6 +40,8 @@
 #import "installer/Package.h"
 #import "installer/PackageCatalog.h"
 #import "installer/PackageQueue.h"
+#import "installer/AppListViewController.h"
+#import "installer/BlockUpdatesViewController.h"
 #import "docs/DocsViewController.h"
 #import "UpdateChecker.h"
 #import "SBLArchiveExtractor.h"
@@ -2696,7 +2698,7 @@ static void settings_log_run_context(void)
 {
 }
 
-static BOOL settings_ensure_kexploit(void)
+BOOL settings_ensure_kexploit(void)
 {
     if (!settings_device_supported()) {
         printf("[SETTINGS] unsupported device: %s\n", settings_unsupported_message().UTF8String);
@@ -9188,7 +9190,7 @@ static _CyanideMailDelegate *_cyanide_mail_delegate(void) {
             if (n == 0) return 0;
             return self.changelogExpanded ? n + 2 : 1;
         }
-        case RootSectionActions:        return 4;
+        case RootSectionActions:        return 6;
         case RootSectionTweakBundles:   return (NSInteger)self.tweakBundleRows.count;
         case RootSectionInDev:         return (NSInteger)self.inDevBundleRows.count;
         case RootSectionSystemBundles:  return (NSInteger)self.systemBundleRows.count;
@@ -11134,11 +11136,30 @@ void cyanide_present_contact(UIViewController *host)
             color  = UIColor.systemRedColor;
             cell.textLabel.text = @"Reset All Packages";
             cell.detailTextLabel.text = anyInstalledOrQueued ? nil : @"Nothing active";
-        } else {
+        } else if (indexPath.row == 3) {
             rowEnabled = YES;
             symbol = @"arrow.down.circle.fill";
             color  = UIColor.systemBlueColor;
             cell.textLabel.text = @"Check for Updates";
+        } else if (indexPath.row == 4) {
+            // Row 4: App Downgrade — list installed apps, look up an older
+            // App Store version, and request it via the SpringBoard
+            // StoreKitUI path (requires KRW).
+            rowEnabled = YES;
+            symbol = @"arrow.uturn.down.circle.fill";
+            color  = UIColor.systemBlueColor;
+            cell.textLabel.text = @"App Downgrade";
+            cell.detailTextLabel.text = @"Downgrade an installed app";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else {
+            // Row 5: Block Updates — per-app App Store auto-update blocker.
+            // Writes to com.apple.MobileStore.plist; works without KRW.
+            rowEnabled = YES;
+            symbol = @"stop.circle.fill";
+            color  = UIColor.systemIndigoColor;
+            cell.textLabel.text = @"Block Updates";
+            cell.detailTextLabel.text = @"Prevent App Store auto-updates per app";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         }
 
         UIColor *effectiveColor = rowEnabled ? color : UIColor.tertiaryLabelColor;
@@ -12762,6 +12783,12 @@ void cyanide_present_contact(UIViewController *host)
             settings_present_controller(ac, self);
         } else if (indexPath.row == 3) {
             [[UpdateChecker shared] checkForUpdatesManuallyFrom:self];
+        } else if (indexPath.row == 4) {
+            AppListViewController *appList = [[AppListViewController alloc] initWithStyle:UITableViewStylePlain];
+            [self.navigationController pushViewController:appList animated:YES];
+        } else if (indexPath.row == 5) {
+            BlockUpdatesViewController *blockUpdates = [[BlockUpdatesViewController alloc] initWithStyle:UITableViewStylePlain];
+            [self.navigationController pushViewController:blockUpdates animated:YES];
         }
     }
 
