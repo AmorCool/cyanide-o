@@ -1,6 +1,6 @@
 ## Project status
 
-Cyanide is no longer actively maintained by `zeroxjf`.
+Cyanide is no longer actively maintained by `0xjohnny`.
 
 Patreon integration has been removed, all installable Cyanide tweaks are free,
 and previously unreleased work-in-progress tweak code has been opened under
@@ -19,12 +19,12 @@ maintained.
 <summary>Archived project README</summary>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/zeroxjf/cyanide/main/Cyanide/Assets.xcassets/AppIcon.appiconset/icon-ios-1024x1024.png" alt="Cyanide" width="160">
+  <img src="https://raw.githubusercontent.com/0xjohnnydev/cyanide/main/Cyanide/Assets.xcassets/AppIcon.appiconset/icon-ios-1024x1024.png" alt="Cyanide" width="160">
 </p>
 
 <h1 align="center">Cyanide</h1>
 
-**By [@zeroxjf](https://github.com/zeroxjf)** — an iOS tweak runner built on top of the DarkSword kernel r/w primitive.
+**By [@0xjohnnydev](https://github.com/0xjohnnydev)** — an iOS tweak runner built on top of the DarkSword kernel r/w primitive.
 
 Cyanide is a fork of [`wh1te4ever/darksword-kexploit-fun`](https://github.com/wh1te4ever/darksword-kexploit-fun)
 for iOS kernel research. It wraps the native DarkSword kernel stages in an
@@ -42,7 +42,7 @@ same AGPL-3.0 license as the rest of the project. Some unfinished entries remain
 visible in the app so contributors can find them, but installation stays
 disabled until someone finishes and verifies them.
 
-`zeroxjf` is stepping away from active Cyanide development. The code is now
+`0xjohnny` is stepping away from active Cyanide development. The code is now
 open under AGPL-3.0 so anyone can fork it, study it, reuse it, or continue it
 under the license terms.
 
@@ -51,18 +51,18 @@ under the license terms.
 Open this page on your iPhone/iPad and tap one of the buttons below.
 
 <p align="center">
-  <a href="https://celloserenity.github.io/altdirect/?url=https://raw.githubusercontent.com/zeroxjf/cyanide/main/source.json" target="_blank">
+  <a href="https://celloserenity.github.io/altdirect/?url=https://raw.githubusercontent.com/0xjohnnydev/cyanide/main/source.json" target="_blank">
     <img src="https://github.com/CelloSerenity/altdirect/blob/main/assets/png/AltSource_Blue.png?raw=true" alt="Add AltSource" width="200">
   </a>
-  <a href="https://github.com/zeroxjf/cyanide/releases/latest" target="_blank">
+  <a href="https://github.com/0xjohnnydev/cyanide/releases/latest" target="_blank">
     <img src="https://github.com/CelloSerenity/altdirect/blob/main/assets/png/Download_Blue.png?raw=true" alt="Download .ipa" width="200">
   </a>
 </p>
 
 ## Feedback
 
-- [Report a bug](https://github.com/zeroxjf/cyanide/issues/new?template=bug_report.yml)
-- [Request a feature](https://github.com/zeroxjf/cyanide/issues/new?template=feature_request.yml)
+- [Report a bug](https://github.com/0xjohnnydev/cyanide/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/0xjohnnydev/cyanide/issues/new?template=feature_request.yml)
 - [Join the Signal group](https://signal.group/#CjQKIP0pxjc9V52ddCNk--04DosuoQl-vVOsznJfQ4GwlrlxEhCveFhBS8YdNcILpUFt7IqC) for setup help, support,
   test notes, and rough ideas before they become issues.
 
@@ -277,8 +277,8 @@ Cyanide includes two JavaScript tweak runners contributed by Iggy05:
 - **QuickLoader** imports a local `.js` file from Files and exposes declared
   `@param` values as settings rows.
 - **RepoTweaks Store** imports HTTPS JSON repositories and downloads selected
-  JavaScript tweaks from those sources. Cyanide seeds the zeroxjf source at
-  `https://zeroxjf.github.io/cyanide-repotweaks.json` by default.
+  JavaScript tweaks from those sources. Cyanide seeds the 0xjohnnydev source at
+  `https://0xjohnnydev.github.io/cyanide-repotweaks.json` by default.
 
 Only run scripts and repositories you trust; JavaScript tweaks can call Cyanide
 RemoteCall helpers and may destabilize SpringBoard if the script is buggy.
