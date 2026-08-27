@@ -409,6 +409,7 @@
 				AAA297752F72D439000B5902 /* Resources */,
 				AAA2989D2F7418CC000B5902 /* CopyFiles */,
 				FBC0A0012FD6000000C0A001 /* Copy Simulator XPF */,
+				BB2986F2F86000000C0A0FF /* Copy iOS XPF */,
 			);
 			buildRules = (
 			);
@@ -630,6 +631,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "if [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    cp \"$SRCROOT/Cyanide/XPF/output/iphonesimulator/libxpf.dylib\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME/libxpf.dylib\"\nfi\n";
+		};
+		BB2986F2F86000000C0A0FF /* Copy iOS XPF */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Cyanide/XPF/output/ios/libxpf.dylib",
+			);
+			name = "Copy iOS XPF";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"$PLATFORM_NAME\" != \"iphonesimulator\" ]; then\n    cp \"$SRCROOT/Cyanide/XPF/output/ios/libxpf.dylib\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME/libxpf.dylib\"\n    codesign --force --sign - \"$TARGET_BUILD_DIR/$WRAPPER_NAME/libxpf.dylib\" || ldid -S \"$TARGET_BUILD_DIR/$WRAPPER_NAME/libxpf.dylib\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
