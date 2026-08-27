@@ -33,7 +33,7 @@ static NSString * const kMobileStorePreferencesPath =
 
 @interface BlockUpdatesViewController ()
 - (NSSet<NSString *> *)readBlockedApps;
-- (void)writeBlockedApps:(NSSet<NSString *> *)blocked;
+- (BOOL)writeBlockedApps:(NSSet<NSString *> *)blocked;
 - (void)refreshBlockedState;
 - (void)configureSearchController;
 - (void)configureTableView;

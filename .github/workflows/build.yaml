@@ -1,6 +1,8 @@
 name: Build Cyanide
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
