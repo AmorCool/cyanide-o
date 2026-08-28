@@ -12,8 +12,11 @@
 # (= the MARKETING_VERSION build setting in the xcodeproj). Bump
 # MARKETING_VERSION to ship a new version.
 #
-# Code signing is disabled — the IPA ships unsigned for sideload via
-# AltStore / TrollStore / Sideloadly, which do their own signing.
+# The main binary and the bundled exploit dylib are ad-hoc signed WITH the
+# platform entitlements embedded (see the iphoneos block below) so the IPA is
+# TrollStore-ready out of the box. TrollStore preserves/grants platform-application
+# + no-sandbox on install; plain sideloaders (AltStore/Sideloadly) cannot grant
+# those and the kernel exploit will fail — Cyanide is TrollStore-only by design.
 
 set -euo pipefail
 
@@ -77,6 +80,34 @@ APP_PATH="$PRODUCT_DIR/$APP_NAME"
 if [ ! -d "$APP_PATH" ]; then
     echo "error: $APP_PATH not found after build" >&2
     exit 1
+fi
+
+# Cyanide's kernel exploit (KRW) needs platform-application + no-sandbox +
+# task_for_pid-allow to perform privileged memory operations (mach_vm_allocate
+# of the 1GB search mapping, RemoteCall shmem, etc.). These entitlements can
+# ONLY be honoured by TrollStore's signing; free-dev sideloading (AltStore /
+# Sideloadly) strips them and the exploit then fails with "no space available"
+# during RemoteCall, which silently breaks PERSIST and App Downgrade.
+#
+# Embed the entitlement blob into the main binary with Apple codesign (NOT ldid
+# — ldid 2.1.x on macOS 15 emits an empty LC_CODE_SIGNATURE superblob that iOS
+# rejects at dlopen). TrollStore preserves/grants these on install; a plain
+# sideloader will re-sign and (correctly) cannot grant platform-application, so
+# the app stays TrollStore-only, which is its intended and only supported path.
+if [ "$SDK" = "iphoneos" ]; then
+    echo "==> embedding platform entitlements into $APP_NAME (TrollStore-ready)"
+    codesign --force --sign - \
+        --entitlements "$PWD/scripts/vphone_app.entitlements" \
+        "$APP_PATH/Cyanide" \
+        || echo "WARN: codesign of main binary failed; relying on the sideloader to apply entitlements"
+    # Re-sign the bundled exploit dylib with the same entitlements so TrollStore
+    # does not strip its loadable status.
+    if [ -f "$APP_PATH/libxpf.dylib" ]; then
+        codesign --force --sign - \
+            --entitlements "$PWD/scripts/vphone_app.entitlements" \
+            "$APP_PATH/libxpf.dylib" \
+            || echo "WARN: codesign of libxpf.dylib failed"
+    fi
 fi
 
 if [ "$SDK" = "iphonesimulator" ]; then
