@@ -449,10 +449,12 @@ extern volatile int g_springboard_sandbox_escaped;
                                               style:UIAlertActionStyleCancel handler:nil]];
 
     if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
-        sheet.popoverPresentationController.sourceView =
-            [tableView cellForRowAtIndexPath:indexPath] ?: self.view;
+        // `?:` cannot be applied to CGRect (a struct) — only to arithmetic or
+        // pointer types — so sourceRect uses an explicit conditional.
+        UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+        sheet.popoverPresentationController.sourceView = cell ?: self.view;
         sheet.popoverPresentationController.sourceRect =
-            [tableView cellForRowAtIndexPath:indexPath].bounds ?: self.view.bounds;
+            cell ? cell.bounds : self.view.bounds;
     }
     [self presentViewController:sheet animated:YES completion:nil];
 }
