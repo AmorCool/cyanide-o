@@ -37,6 +37,7 @@
 #import "appdowngrade.h"
 
 #import <dlfcn.h>
+#import <dispatch/dispatch.h>
 #import <objc/runtime.h>
 #import <string.h>
 
