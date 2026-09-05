@@ -96,13 +96,23 @@ static uint64_t blockupdates_remote_alloc_str(const char *s)
 - (void)loadApps
 {
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        // Same one-shot escape guard as AppListViewController.
-        if (!g_springboard_sandbox_escaped) {
-            if (escape_sbx_demo2()) {
+        // Scan FIRST: free when the sandbox is already lifted (chain stage 3
+        // consumes the extension process-wide) or TrollStore runs us with
+        // no-sandbox. Only fall back to the one-shot escape when the scan
+        // came up empty — escape_sbx_demo2() is NOT idempotent and returns
+        // 0 on success, -1 on failure (compare against 0, not bare truthy).
+        NSArray<NSDictionary *> *found = [self scanInstalledApps];
+        if (found.count == 0 && !g_springboard_sandbox_escaped) {
+            log_user("[BLOCKUPD] direct scan found 0 apps; attempting sandbox escape...\n");
+            if (escape_sbx_demo2() == 0) {
                 g_springboard_sandbox_escaped = YES;
+                found = [self scanInstalledApps];
+            } else {
+                log_user("[BLOCKUPD] sandbox escape failed (KRW/SpringBoard channel not up?) — "
+                         "run the chain (Run) first, then pull to refresh.\n");
             }
         }
-        NSArray<NSDictionary *> *found = [self scanInstalledApps];
+        log_user("[BLOCKUPD] installed apps found: %lu\n", (unsigned long)found.count);
         dispatch_async(dispatch_get_main_queue(), ^{
             if (found.count > 0) {
                 self.apps = found;
@@ -110,8 +120,22 @@ static uint64_t blockupdates_remote_alloc_str(const char *s)
             self.filteredApps = self.apps;
             [self.tableView reloadData];
             [self.tableView.refreshControl endRefreshing];
+            self.tableView.backgroundView = (self.apps.count == 0) ? [self emptyStateLabel] : nil;
         });
     });
+}
+
+// Shown instead of a silent blank table when enumeration yields nothing.
+- (UILabel *)emptyStateLabel
+{
+    UILabel *label = [[UILabel alloc] init];
+    label.text = @"未找到已安装应用\n请先在主界面运行越狱链（Run）解除沙盒，\n然后回到本页下拉刷新。";
+    label.numberOfLines = 0;
+    label.textAlignment = NSTextAlignmentCenter;
+    label.textColor = [UIColor secondaryLabelColor];
+    label.font = [UIFont systemFontOfSize:15.0];
+    [label sizeToFit];
+    return label;
 }
 
 - (NSArray<NSDictionary *> *)scanInstalledApps

@@ -25,8 +25,11 @@
 // containers directly. Repeated calls re-consume the KRW primitives every
 // time, so it is guarded by g_springboard_sandbox_escaped exactly like the
 // shipped binary does (cbnz w8 -> skip; bl _escape_sbx_demo2).
+// NOTE: escape_sbx_demo2() returns 0 on success, -1 on failure — compare
+// against 0, never use it as a bare boolean.
 extern int escape_sbx_demo2(void);
 extern volatile int g_springboard_sandbox_escaped;
+extern void log_user(const char *fmt, ...);
 
 #define R_DOWNGRADE_HISTORY_API_FORMAT @"https://apis.bilin.eu.org/history/%lld"
 #define R_ITUNES_LOOKUP_BUNDLE_FORMAT  @"https://itunes.apple.com/lookup?bundleId=%@&limit=1&media=software&country=%@"
@@ -62,6 +65,11 @@ extern volatile int g_springboard_sandbox_escaped;
     self.navigationItem.hidesSearchBarWhenScrolling = NO;
     self.definesPresentationContext = YES;
 
+    self.refreshControl = [[UIRefreshControl alloc] init];
+    [self.refreshControl addTarget:self
+                            action:@selector(handleRefresh:)
+                  forControlEvents:UIControlEventValueChanged];
+
     self.filteredApps = self.apps;
     [self loadApps];
 }
@@ -81,6 +89,8 @@ extern volatile int g_springboard_sandbox_escaped;
                 else self.apps = previous;
                 self.filteredApps = self.apps;
                 [self.tableView reloadData];
+                [self.tableView.refreshControl endRefreshing];
+                if (self.apps.count > 0) self.tableView.backgroundView = nil;
             });
         });
         return;
@@ -92,21 +102,49 @@ extern volatile int g_springboard_sandbox_escaped;
     self.tableView.backgroundView = spinner;
 
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        // Sandbox escape is one-shot per process lifetime; without this guard
-        // every refresh would burn another kernel primitive and break KRW.
-        if (!g_springboard_sandbox_escaped) {
-            if (escape_sbx_demo2()) {
+        // Scan FIRST: free when the sandbox is already lifted (chain stage 3
+        // consumes the extension process-wide) or TrollStore runs us with
+        // no-sandbox. Only fall back to the escape when the scan came up
+        // empty — escape_sbx_demo2() is NOT idempotent (it burns a fresh
+        // SpringBoard remote-call session every time).
+        NSArray<NSDictionary *> *found = [self scanInstalledApps];
+        if (found.count == 0 && !g_springboard_sandbox_escaped) {
+            log_user("[APPLIST] direct scan found 0 apps; attempting sandbox escape...\n");
+            if (escape_sbx_demo2() == 0) {
                 g_springboard_sandbox_escaped = YES;
+                found = [self scanInstalledApps];
+            } else {
+                log_user("[APPLIST] sandbox escape failed (KRW/SpringBoard channel not up?) — "
+                         "run the chain (Run) first, then pull to refresh.\n");
             }
         }
-        NSArray<NSDictionary *> *found = [self scanInstalledApps];
+        log_user("[APPLIST] installed apps found: %lu\n", (unsigned long)found.count);
         dispatch_async(dispatch_get_main_queue(), ^{
             self.apps = found;
             self.filteredApps = self.apps;
             [self.tableView reloadData];
-            self.tableView.backgroundView = nil;
+            [self.tableView.refreshControl endRefreshing];
+            self.tableView.backgroundView = (found.count == 0) ? [self emptyStateLabel] : nil;
         });
     });
+}
+
+// Shown instead of a silent blank table when enumeration yields nothing.
+- (UILabel *)emptyStateLabel
+{
+    UILabel *label = [[UILabel alloc] init];
+    label.text = @"未找到已安装应用\n请先在主界面运行越狱链（Run）解除沙盒，\n然后回到本页下拉刷新。";
+    label.numberOfLines = 0;
+    label.textAlignment = NSTextAlignmentCenter;
+    label.textColor = [UIColor secondaryLabelColor];
+    label.font = [UIFont systemFontOfSize:15.0];
+    [label sizeToFit];
+    return label;
+}
+
+- (void)handleRefresh:(UIRefreshControl *)sender
+{
+    [self loadApps];
 }
 
 - (NSArray<NSDictionary *> *)scanInstalledApps
