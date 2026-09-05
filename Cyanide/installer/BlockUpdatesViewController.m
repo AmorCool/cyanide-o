@@ -227,7 +227,7 @@ static uint64_t blockupdates_remote_alloc_str(const char *s)
                     uint64_t mkdirRet = do_remote_call_stable(kBlockRCTimeout, "mkdir",
                                                               remotePath, 0755, 0, 0, 0, 0, 0, 0);
                     do_remote_call_stable(kBlockRCTimeout, "chmod",
-                                          remotePath, 0, 0, 0, 0, 0, 0);
+                                          remotePath, 0, 0, 0, 0, 0, 0, 0);
                     if (mkdirRet != 0) {
                         log_user("[WARN] Failed to block %s (Code: %llu)\n",
                                  name.UTF8String, mkdirRet);
@@ -238,7 +238,7 @@ static uint64_t blockupdates_remote_alloc_str(const char *s)
                     do_remote_call_stable(kBlockRCTimeout, "chmod",
                                           remotePath, 0755, 0, 0, 0, 0, 0, 0);
                     uint64_t rmdirRet = do_remote_call_stable(kBlockRCTimeout, "rmdir",
-                                                              remotePath, 0, 0, 0, 0, 0, 0);
+                                                              remotePath, 0, 0, 0, 0, 0, 0, 0);
                     if (rmdirRet != 0) {
                         log_user("[WARN] Failed to unblock %s (Code: %llu)\n",
                                  name.UTF8String, rmdirRet);
@@ -247,7 +247,7 @@ static uint64_t blockupdates_remote_alloc_str(const char *s)
                     }
                 }
 
-                do_remote_call_stable(kBlockRCTimeout, "free", remotePath, 0, 0, 0, 0, 0, 0);
+                do_remote_call_stable(kBlockRCTimeout, "free", remotePath, 0, 0, 0, 0, 0, 0, 0);
             }
 
             log_user("[BLOCKUPDATES] Done.\n");
