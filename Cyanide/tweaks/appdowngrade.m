@@ -127,6 +127,15 @@ static uint64_t downgrade_remote_sel_registerName(const char *name)
     do_remote_call_stable(kDowngradeRCTimeout, "objc_msgSend", \
                           (uint64_t)(obj), (uint64_t)(sel), 0, 0, 0, 0, 0, 0)
 
+// objc_msgSend with four value arguments. Needed by
+// -[SKUIItemStateCenter _performPurchases:hasBundlePurchase:withClientContext:completionBlock:],
+// which carries 4 arguments and therefore cannot be expressed with REMOTE_MSG.
+#define REMOTE_MSG4(obj, sel, a0, a1, a2, a3) \
+    do_remote_call_stable(kDowngradeRCTimeout, "objc_msgSend", \
+                          (uint64_t)(obj), (uint64_t)(sel), \
+                          (uint64_t)(a0), (uint64_t)(a1), \
+                          (uint64_t)(a2), (uint64_t)(a3), 0, 0)
+
 // Free the mirrored literals on every exit path.
 static void downgrade_free_literals(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                                     uint64_t e, uint64_t f, uint64_t g)
@@ -280,9 +289,9 @@ void downgrade_trigger_in_springboard(NSString *trackID, NSString *versionId)
                                                 items, 0);
 
             log_user("[DOWNGRADE] Sending purchase request to App Store daemon...\n");
-            REMOTE_MSG(stateCenter,
-                       downgrade_remote_sel_registerName("_performPurchases:hasBundlePurchase:withClientContext:completionBlock:"),
-                       purchases, 0, clientContext, 0);
+            REMOTE_MSG4(stateCenter,
+                        downgrade_remote_sel_registerName("_performPurchases:hasBundlePurchase:withClientContext:completionBlock:"),
+                        purchases, 0, clientContext, 0);
 
             downgrade_free_literals(remoteAdamId, remoteBuy, remoteIOS, remoteKey,
                                     remoteOffer, remoteKind, remoteVer);
