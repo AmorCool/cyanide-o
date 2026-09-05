@@ -1,194 +1,286 @@
 //
 //  BlockUpdatesViewController.m
-//  Cyanide
+//  Blocks App Store updates for the selected apps.
 //
-//  Reconstructed from binary analysis of Cyanide 1.2.24 (Block Updates feature).
+//  Mechanism (all inside SpringBoard via do_remote_call_stable):
+//    block:   path = <AppBundlePath>/com.apple.mobileinstallation.placeholder
+//             mkdir(path, 0755) + chmod(path, 0)   — a mode-0 placeholder
+//             entry makes mobileinstallation treat the bundle as managed and
+//             the App Store stops offering updates for it.
+//    unblock: chmod(path, 0755) + rmdir(path)
 //
-//  Behavior recovered from the binary:
-//    - loadApps lists installed apps (original used mobile_installation_proxy;
-//      this rebuild uses LSApplicationWorkspace for the same result).
-//    - waitingApps holds bundle ids the user has toggled.
-//    - commitUpdates persists the blocked list and logs
-//      "[OK] Blocked updates for: %s" / "[OK] Unblocked updates for: %s".
-//
-//  This rebuild persists the blocked bundle-ids to itunesstored preferences
-//  (com.apple.MobileStore.plist, key "CyanideBlockedUpdates") and notifies
-//  cfprefsd so the change survives until a respring.
+//  Selection state lives in waitingApps (NSMutableSet of bundle IDs); Done
+//  commits the whole batch in one RemoteCall session, mirroring the binary's
+//  flow: stop live loops -> settings_rc_lock + @synchronized -> re-init the
+//  SpringBoard session if stale -> per-app remote mkdir/chmod/rmdir.
 //
 
 #import "BlockUpdatesViewController.h"
-#import "InstalledAppEnumerator.h"
-#import "../SettingsViewController.h"
-#import "../LogTextView.h"
-#import <notify.h>
+#import "../TaskRop/RemoteCall.h"
 
-#pragma mark - Constants
+#include <unistd.h>
 
-static NSString * const kBlockUpdatesCellID      = @"BlockUpdatesCell";
-static NSString * const kBlockedUpdatesKey       = @"CyanideBlockedUpdates";
-static NSString * const kMobileStorePreferencesPath =
-    @"/var/mobile/Library/Preferences/com.apple.MobileStore.plist";
+// Exported by the mod build (upstream keeps these static in
+// SettingsViewController.m; the mod de-static'd them for payload reuse).
+extern BOOL settings_ensure_kexploit(void);
+extern void settings_request_all_live_loops_stop(const char *reason);
+extern BOOL settings_wait_live_loops_stopped_for_switch(const char *reason);
+extern NSObject *settings_rc_lock(void);
+extern void settings_destroy_springboard_remote_call_locked_internal_ex(const char *reason, BOOL notifyState, BOOL preserveApplied);
+// init_remote_call is declared in ../TaskRop/RemoteCall.h (imported above):
+//   int init_remote_call(const char* process, bool useMigFilterBypass);
+extern void log_user(const char *fmt, ...);
+extern void log_session_begin(void);
+extern void log_session_end(void);
 
-#pragma mark - Implementation
+extern uint64_t do_remote_call_stable(int timeout, const char *name,
+    uint64_t x0, uint64_t x1, uint64_t x2, uint64_t x3,
+    uint64_t x4, uint64_t x5, uint64_t x6, uint64_t x7);
+extern bool remote_write(uint64_t dst, const void *src, uint64_t size);
+
+// From ViewController.m. Guarded by g_springboard_sandbox_escaped — calling
+// it repeatedly burns kernel primitives and breaks KRW for every other tweak.
+extern int escape_sbx_demo2(void);
+extern volatile int g_springboard_sandbox_escaped;
+
+static const int kBlockRCTimeout = 1000;
+
+static uint64_t blockupdates_remote_alloc_str(const char *s)
+{
+    if (!s) return 0;
+    uint64_t remote = do_remote_call_stable(kBlockRCTimeout, "malloc",
+                                            strlen(s) + 1, 0, 0, 0, 0, 0, 0, 0);
+    if (remote) {
+        remote_write(remote, s, strlen(s) + 1);
+    }
+    return remote;
+}
 
 @interface BlockUpdatesViewController ()
-- (NSSet<NSString *> *)readBlockedApps;
-- (BOOL)writeBlockedApps:(NSSet<NSString *> *)blocked;
-- (void)refreshBlockedState;
-- (void)configureSearchController;
-- (void)configureTableView;
+@property (nonatomic, strong) NSArray<NSDictionary *> *apps;
+@property (nonatomic, strong) NSArray<NSDictionary *> *filteredApps;
+@property (nonatomic, strong) NSMutableSet<NSString *> *waitingApps;
+@property (nonatomic, strong) UISearchController *searchController;
 @end
 
 @implementation BlockUpdatesViewController
 
-#pragma mark - Lifecycle
-
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-
     self.title = @"Block Updates";
+    self.tableView.rowHeight = 60.0;
     self.waitingApps = [NSMutableSet set];
 
-    [self configureSearchController];
-    [self configureTableView];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+        initWithTitle:@"Done" style:UIBarButtonItemStyleDone
+        target:self action:@selector(commitUpdates)];
 
-    UIBarButtonItem *commit = [[UIBarButtonItem alloc]
-        initWithTitle:@"Commit"
-                style:UIBarButtonItemStyleDone
-               target:self
-               action:@selector(commitUpdates)];
-    self.navigationItem.rightBarButtonItem = commit;
+    UIRefreshControl *refresh = [[UIRefreshControl alloc] init];
+    [refresh addTarget:self action:@selector(handleRefresh:)
+      forControlEvents:UIControlEventValueChanged];
+    self.tableView.refreshControl = refresh;
 
-    [self loadApps];
-}
-
-- (void)configureSearchController
-{
     self.searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
     self.searchController.searchResultsUpdater = self;
     self.searchController.obscuresBackgroundDuringPresentation = NO;
-    self.searchController.searchBar.placeholder = @"Search Apps";
+    self.searchController.searchBar.placeholder = @"Search App";
     self.navigationItem.searchController = self.searchController;
     self.navigationItem.hidesSearchBarWhenScrolling = NO;
     self.definesPresentationContext = YES;
+
+    self.filteredApps = self.apps;
+    [self loadApps];
 }
-
-- (void)configureTableView
-{
-    self.tableView.delegate = self;
-    self.tableView.dataSource = self;
-    self.tableView.allowsMultipleSelection = YES;
-    self.tableView.tableFooterView = [UIView new];
-    [self.tableView registerClass:[UITableViewCell class]
-           forCellReuseIdentifier:kBlockUpdatesCellID];
-
-    UIRefreshControl *rc = [[UIRefreshControl alloc] init];
-    [rc addTarget:self action:@selector(handleRefresh:) forControlEvents:UIControlEventValueChanged];
-    self.refreshControl = rc;
-}
-
-#pragma mark - App enumeration
 
 - (void)loadApps
 {
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
-        // Shared MIP-first enumerator (same fix as App Downgrade): the
-        // original binary used mobile_installation_proxy; the LSApplicationWorkspace
-        // in-app call returns empty on iOS 17+.
-        NSArray<InstalledApp *> *installed = InstalledAppEnumeratorList();
-        for (InstalledApp *ia in installed) {
-            if (!ia.bundleID.length) continue;
-            [result addObject:@{
-                @"bundleID": ia.bundleID,
-                @"name": ia.name.length ? ia.name : ia.bundleID,
-                @"version": ia.version.length ? ia.version : @"",
-            }];
-        }
-        [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-            return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];
-        }];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.apps = result;
-            self.filteredApps = result;
-            [self refreshBlockedState];
-            // Preselect when pushed from AppList so the user can commit/unblock
-            // the chosen app in one step.
-            if (self.preselectedBundleID.length) {
-                [self.waitingApps addObject:self.preselectedBundleID];
-                self.preselectedBundleID = nil;
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        // Same one-shot escape guard as AppListViewController.
+        if (!g_springboard_sandbox_escaped) {
+            if (escape_sbx_demo2()) {
+                g_springboard_sandbox_escaped = YES;
             }
+        }
+        NSArray<NSDictionary *> *found = [self scanInstalledApps];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (found.count > 0) {
+                self.apps = found;
+            }
+            self.filteredApps = self.apps;
+            [self.tableView reloadData];
+            [self.tableView.refreshControl endRefreshing];
+        });
+    });
+}
+
+- (NSArray<NSDictionary *> *)scanInstalledApps
+{
+    // Caller guarantees the sandbox escape already happened (loadApps guard).
+    NSArray<NSString *> *uuids = [[NSFileManager defaultManager]
+        contentsOfDirectoryAtPath:@"/var/containers/Bundle/Application" error:nil];
+    NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
+    for (NSString *uuid in uuids) {
+        NSString *root = [@"/var/containers/Bundle/Application" stringByAppendingPathComponent:uuid];
+        for (NSString *entry in [[NSFileManager defaultManager]
+                contentsOfDirectoryAtPath:root error:nil]) {
+            if (![entry.pathExtension isEqualToString:@".app"]) continue;
+            NSString *bundlePath = [root stringByAppendingPathComponent:entry];
+            NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:
+                [bundlePath stringByAppendingPathComponent:@"Info.plist"]];
+            if (!info) continue;
+            NSMutableDictionary *app = [info mutableCopy];
+            app[@"AppBundlePath"] = bundlePath;
+            [out addObject:app];
+        }
+    }
+    return [out copy];
+}
+
+- (void)handleRefresh:(UIRefreshControl *)sender
+{
+    [self loadApps];
+}
+
+- (BOOL)isFiltering
+{
+    return self.searchController.isActive && self.searchController.searchBar.text.length > 0;
+}
+
+- (void)updateSearchResultsForSearchController:(UISearchController *)searchController
+{
+    NSString *query = searchController.searchBar.text;
+    if (query.length == 0) {
+        self.filteredApps = self.apps;
+    } else {
+        self.filteredApps = [self.apps filteredArrayUsingPredicate:
+            [NSPredicate predicateWithBlock:^BOOL(NSDictionary *app, NSDictionary *bindings) {
+                NSString *name = app[@"CFBundleDisplayName"] ?: app[@"CFBundleName"];
+                return [name localizedCaseInsensitiveContainsString:query] ||
+                       [app[@"CFBundleIdentifier"] localizedCaseInsensitiveContainsString:query];
+            }]];
+    }
+    [self.tableView reloadData];
+}
+
+#pragma mark - Commit
+
+- (void)commitUpdates
+{
+    if (self.waitingApps.count == 0) {
+        return;
+    }
+
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        log_session_begin();
+        NSMutableSet<NSString *> *waiting = self.waitingApps;
+        log_user("[BLOCKUPDATES] Applying %lu selections...\n", (unsigned long)waiting.count);
+
+        if (!settings_ensure_kexploit()) {
+            log_user("[BLOCKUPDATES] Failed: kernel primitives not acquired.\n");
+            log_session_end();
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self presentFailure:@"Could not acquire kernel primitives. Please try again or reboot."];
+            });
+            return;
+        }
+
+        settings_request_all_live_loops_stop("BlockUpdates");
+        settings_wait_live_loops_stopped_for_switch("BlockUpdates");
+
+        // settings_rc_lock() returns the shared lock object; the entire
+        // SpringBoard session (including the stale-session recovery below)
+        // must stay inside @synchronized so nothing else touches the session
+        // and every path releases the lock.
+        @synchronized (settings_rc_lock()) {
+            if (!init_remote_call("SpringBoard", false)) {
+                // Session may be stale after a respring — force a fresh attach.
+                settings_destroy_springboard_remote_call_locked_internal_ex(
+                    "BlockUpdates retry", YES, NO);
+                if (!init_remote_call("SpringBoard", false)) {
+                    log_user("[BLOCKUPDATES] Failed to attach to SpringBoard.\n");
+                    log_session_end();
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self presentFailure:@"Could not attach to SpringBoard. Please respring and retry."];
+                    });
+                    return;
+                }
+            }
+
+            for (NSDictionary *app in self.apps) {
+                NSString *bundleId = app[@"CFBundleIdentifier"];
+                if (!bundleId || ![waiting containsObject:bundleId]) {
+                    continue;
+                }
+                BOOL block = ![self placeholderActiveForApp:app];
+
+                NSString *name = app[@"CFBundleDisplayName"] ?: app[@"CFBundleName"];
+                NSString *path = [app[@"AppBundlePath"]
+                    stringByAppendingPathComponent:@"com.apple.mobileinstallation.placeholder"];
+                uint64_t remotePath = blockupdates_remote_alloc_str(path.UTF8String);
+                if (!remotePath) {
+                    log_user("[BLOCKUPDATES] Failed to alloc path for %s\n", name.UTF8String);
+                    continue;
+                }
+
+                if (block) {
+                    uint64_t mkdirRet = do_remote_call_stable(kBlockRCTimeout, "mkdir",
+                                                              remotePath, 0755, 0, 0, 0, 0, 0, 0);
+                    do_remote_call_stable(kBlockRCTimeout, "chmod",
+                                          remotePath, 0, 0, 0, 0, 0, 0);
+                    if (mkdirRet != 0) {
+                        log_user("[WARN] Failed to block %s (Code: %llu)\n",
+                                 name.UTF8String, mkdirRet);
+                    } else {
+                        log_user("[OK] Blocked updates for: %s\n", name.UTF8String);
+                    }
+                } else {
+                    do_remote_call_stable(kBlockRCTimeout, "chmod",
+                                          remotePath, 0755, 0, 0, 0, 0, 0, 0);
+                    uint64_t rmdirRet = do_remote_call_stable(kBlockRCTimeout, "rmdir",
+                                                              remotePath, 0, 0, 0, 0, 0, 0);
+                    if (rmdirRet != 0) {
+                        log_user("[WARN] Failed to unblock %s (Code: %llu)\n",
+                                 name.UTF8String, rmdirRet);
+                    } else {
+                        log_user("[OK] Unblocked updates for: %s\n", name.UTF8String);
+                    }
+                }
+
+                do_remote_call_stable(kBlockRCTimeout, "free", remotePath, 0, 0, 0, 0, 0, 0);
+            }
+
+            log_user("[BLOCKUPDATES] Done.\n");
+        }
+
+        log_session_end();
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.waitingApps removeAllObjects];
             [self.tableView reloadData];
         });
     });
 }
 
-- (void)handleRefresh:(UIRefreshControl *)refreshControl
+// Local probe — the blocked state is a mode-0 placeholder entry inside the
+// bundle; any existing entry (EACCES included) means "blocked".
+- (BOOL)placeholderActiveForApp:(NSDictionary *)app
 {
-    [self loadApps];
-    [refreshControl endRefreshing];
+    NSString *path = [app[@"AppBundlePath"]
+        stringByAppendingPathComponent:@"com.apple.mobileinstallation.placeholder"];
+    return access(path.UTF8String, F_OK) == 0;
 }
 
-#pragma mark - Blocked-state persistence
-
-- (NSSet<NSString *> *)readBlockedApps
+- (void)presentFailure:(NSString *)message
 {
-    NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:kMobileStorePreferencesPath];
-    NSArray *arr = plist[kBlockedUpdatesKey];
-    if (![arr isKindOfClass:NSArray.class]) return [NSSet set];
-    return [NSSet setWithArray:arr];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Failed"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
-- (BOOL)writeBlockedApps:(NSSet<NSString *> *)blocked
-{
-    // Read-modify-write the itunesstored preferences file.
-    NSMutableDictionary *plist = [NSMutableDictionary
-        dictionaryWithContentsOfFile:kMobileStorePreferencesPath];
-    if (!plist) plist = [NSMutableDictionary dictionary];
-    plist[kBlockedUpdatesKey] = [blocked.allObjects sortedArrayUsingSelector:@selector(compare:)];
-    BOOL ok = [plist writeToFile:kMobileStorePreferencesPath atomically:YES];
-    if (!ok) {
-        log_user("[BLOCKUPDATES] ERROR: writeToFile failed for %s (sandbox/permission?).\n",
-                 kMobileStorePreferencesPath.UTF8String);
-    }
-    return ok;
-}
-
-- (void)refreshBlockedState
-{
-    NSSet<NSString *> *blocked = [self readBlockedApps];
-    [self.waitingApps removeAllObjects];
-    for (NSDictionary *app in self.apps) {
-        if ([blocked containsObject:app[@"bundleID"]]) {
-            [self.waitingApps addObject:app[@"bundleID"]];
-        }
-    }
-}
-
-#pragma mark - Search
-
-- (void)updateSearchResultsForSearchController:(UISearchController *)searchController
-{
-    NSString *text = searchController.searchBar.text;
-    NSString *trimmed = [text stringByTrimmingCharactersInSet:
-                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (trimmed.length == 0) {
-        self.isFiltering = NO;
-        self.filteredApps = self.apps;
-        [self.tableView reloadData];
-        return;
-    }
-    self.isFiltering = YES;
-    self.filteredApps = [self.apps filteredArrayUsingPredicate:
-        [NSPredicate predicateWithBlock:^BOOL(NSDictionary *app, NSDictionary *bindings) {
-            return [app[@"name"] localizedCaseInsensitiveContainsString:trimmed] ||
-                   [app[@"bundleID"] localizedCaseInsensitiveContainsString:trimmed];
-        }]];
-    [self.tableView reloadData];
-}
-
-#pragma mark - Table view
+#pragma mark - UITableViewDataSource
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
@@ -197,108 +289,39 @@ static NSString * const kMobileStorePreferencesPath =
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    NSArray<NSDictionary *> *source = self.isFiltering ? self.filteredApps : self.apps;
-    return (NSInteger)source.count;
-}
-
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
-{
-    if (self.isFiltering) return nil;
-    return self.waitingApps.count
-        ? [NSString stringWithFormat:@"Blocked (%lu app%@)", (unsigned long)self.waitingApps.count,
-           self.waitingApps.count == 1 ? @"" : @"s"]
-        : @"Tap apps to block their App Store updates";
+    return self.isFiltering ? self.filteredApps.count : self.apps.count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kBlockUpdatesCellID
-                                                            forIndexPath:indexPath];
+    static NSString *identifier = @"BlockCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
-                                      reuseIdentifier:kBlockUpdatesCellID];
+                                     reuseIdentifier:identifier];
     }
-    NSArray<NSDictionary *> *source = self.isFiltering ? self.filteredApps : self.apps;
-    if (indexPath.row >= (NSInteger)source.count) return cell;
-    NSDictionary *app = source[indexPath.row];
-    NSString *bundleID = app[@"bundleID"];
-    cell.textLabel.text = app[@"name"];
-    cell.detailTextLabel.text = bundleID;
-    cell.imageView.image = [UIImage systemImageNamed:@"app"];
-    BOOL blocked = [self.waitingApps containsObject:bundleID];
-    cell.accessoryType = blocked ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-    cell.textLabel.textColor = blocked ? UIColor.systemBlueColor : UIColor.labelColor;
+    NSDictionary *app = [self isFiltering] ? self.filteredApps[indexPath.row]
+                                           : self.apps[indexPath.row];
+    cell.textLabel.text = app[@"CFBundleDisplayName"] ?: app[@"CFBundleName"];
+    cell.detailTextLabel.text = app[@"CFBundleIdentifier"];
+    cell.accessoryType = [self.waitingApps containsObject:app[@"CFBundleIdentifier"]]
+        ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
     return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    NSArray<NSDictionary *> *source = self.isFiltering ? self.filteredApps : self.apps;
-    if (indexPath.row >= (NSInteger)source.count) return;
-    NSString *bundleID = source[indexPath.row][@"bundleID"];
-    if ([self.waitingApps containsObject:bundleID]) {
-        [self.waitingApps removeObject:bundleID];
+    NSDictionary *app = [self isFiltering] ? self.filteredApps[indexPath.row]
+                                           : self.apps[indexPath.row];
+    NSString *bundleId = app[@"CFBundleIdentifier"];
+    if (!bundleId) return;
+    if ([self.waitingApps containsObject:bundleId]) {
+        [self.waitingApps removeObject:bundleId];
     } else {
-        [self.waitingApps addObject:bundleID];
+        [self.waitingApps addObject:bundleId];
     }
-    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:0]
-                  withRowAnimation:UITableViewRowAnimationAutomatic];
-}
-
-#pragma mark - Commit
-
-- (void)commitUpdates
-{
-    NSSet<NSString *> *previous = [self readBlockedApps];
-    NSSet<NSString *> *next = [NSSet setWithSet:self.waitingApps];
-
-    // Determine per-app changes for logging.
-    NSMutableSet<NSString *> *added   = [next mutableCopy];
-    [added minusSet:previous];
-    NSMutableSet<NSString *> *removed = [previous mutableCopy];
-    [removed minusSet:next];
-
-    BOOL wrote = [self writeBlockedApps:next];
-    if (!wrote) {
-        UIAlertController *ac = [UIAlertController
-            alertControllerWithTitle:@"Block Updates Failed"
-                             message:[NSString stringWithFormat:
-                                 @"Could not write the blocked-app list to:\n%@\n\n"
-                                 @"The app runs sandboxed and this path may be read-only on your "
-                                 @"device. Check the Log tab for details.",
-                                 kMobileStorePreferencesPath]
-                      preferredStyle:UIAlertControllerStyleAlert];
-        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:ac animated:YES completion:nil];
-        return;
-    }
-    // Ask cfprefsd to reload the preference file.
-    notify_post("com.apple.MobileStore.prefsChanged");
-    // Also wake the iTunes Store daemon so it re-reads prefs without requiring
-    // a respring/reboot — iTunes Store caches preference values at launch.
-    // (No-op on older iOS versions that don't define the notification.)
-    notify_post("com.apple.itunesstored.foregroundPrefChange");
-
-    for (NSString *b in added) {
-        log_user("[OK] Blocked updates for: %s\n", b.UTF8String);
-    }
-    for (NSString *b in removed) {
-        log_user("[OK] Unblocked updates for: %s\n", b.UTF8String);
-    }
-    log_user("[BLOCKUPDATES] Wrote %lu blocked bundle id(s) to %s. A respring/reboot is required for App Store to fully honor the change.\n",
-             (unsigned long)next.count, kMobileStorePreferencesPath.UTF8String);
-
-    [self.tableView reloadData];
-
-    UIAlertController *ac = [UIAlertController
-        alertControllerWithTitle:@"Block Updates"
-                         message:[NSString stringWithFormat:
-                             @"Blocked %lu app(s), unblocked %lu app(s).\n\nFor best results, force-quit App Store (swipe up from app switcher) or respring. Cyanide notifies the iTunes Store daemon to re-read preferences, but App Store caches them at launch.",
-                             (unsigned long)added.count, (unsigned long)removed.count]
-                  preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:ac animated:YES completion:nil];
+    [tableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
 }
 
 @end

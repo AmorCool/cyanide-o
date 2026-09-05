@@ -1049,7 +1049,7 @@ static void cyanide_upload_log_if_enabled(void);
 static void cyanide_upload_log_milestone(NSString *event);
 static void cyanide_start_session_uploads(void);
 static void cyanide_stop_session_uploads(void);
-static NSObject *settings_rc_lock(void);
+NSObject *settings_rc_lock(void);
 static BOOL settings_cleanup_in_progress(void);
 static BOOL settings_screen_awake_cached(void);
 static BOOL settings_screen_locked_cached(void);
@@ -1064,7 +1064,7 @@ static volatile int g_settings_actions_running = 0;
 static volatile int g_settings_respring_cleanup_running = 0;
 static volatile int g_settings_actions_rerun_requested = 0;
 static volatile int g_springboard_rc_ready = 0;
-static volatile int g_springboard_sandbox_escaped = 0;
+volatile int g_springboard_sandbox_escaped = 0;
 static volatile int g_statbar_live_running = 0;
 static volatile int g_statbar_live_stop_requested = 0;
 static volatile int g_nsbar_live_running = 0;
@@ -1701,7 +1701,7 @@ static void settings_notify_package_queue_changed_async(void)
     });
 }
 
-static NSObject *settings_rc_lock(void) {
+NSObject *settings_rc_lock(void) {
     static NSObject *lock = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -1740,7 +1740,7 @@ static void settings_schedule_themer_repair_burst(const char *reason);
 static void settings_schedule_themer_quiet_repair_burst(const char *reason);
 static void settings_notify_remote_call_state_changed(void);
 static void settings_notify_remote_call_state_changed_preserving_applied(BOOL preserveApplied);
-static void settings_request_all_live_loops_stop(const char *reason);
+void settings_request_all_live_loops_stop(const char *reason);
 static void settings_clear_hide_home_bar_respring_pending(void);
 
 static BOOL settings_should_log_statbar_tick(NSUInteger tick) {
@@ -2436,7 +2436,7 @@ static BOOL settings_cleanup_in_progress(void)
            g_settings_respring_cleanup_running != 0;
 }
 
-static void settings_request_all_live_loops_stop(const char *reason)
+void settings_request_all_live_loops_stop(const char *reason)
 {
     settings_each_springboard_cleanup_entry(^(const SettingsSpringBoardTweakCleanupEntry *entry) {
         if (entry->requestStop) entry->requestStop();
@@ -2476,7 +2476,7 @@ static BOOL settings_has_persistent_springboard_remote_call_user(void)
     return active;
 }
 
-static void settings_wait_live_loops_stopped_for_switch(const char *reason)
+void settings_wait_live_loops_stopped_for_switch(const char *reason)
 {
     uint64_t startUS = settings_now_us();
     BOOL logged = NO;
@@ -2767,7 +2767,7 @@ static BOOL settings_ensure_kexploit_recovery_only(void)
     return YES;
 }
 
-static BOOL settings_ensure_springboard_remote_call_locked(void)
+BOOL settings_ensure_springboard_remote_call_locked(void)
 {
     if (g_springboard_rc_ready) {
         printf("[SETTINGS] reusing SpringBoard RemoteCall session\n");
@@ -2787,7 +2787,7 @@ static BOOL settings_ensure_springboard_remote_call_locked(void)
     return YES;
 }
 
-static void settings_destroy_springboard_remote_call_locked_internal_ex(const char *reason, BOOL notifyState, BOOL preserveApplied)
+void settings_destroy_springboard_remote_call_locked_internal_ex(const char *reason, BOOL notifyState, BOOL preserveApplied)
 {
     if (!g_springboard_rc_ready) return;
 
